@@ -1,21 +1,10 @@
 # highway-bandits
 
 Code for **"Learning a Lipschitz Reward Surface with Endogenous Partitions"**
-(draft in `paper/main.tex`).
 
-We model dynamic toll pricing on a managed lane as a Lipschitz semi-bandit over a
-2-D reward surface `g(θ, p)` on `[0,1] × [0,M]` (time of day × price). Each round the
-learner picks a partition of the day plus a price per interval, and sees one noisy
-signal per interval whose variance scales with the interval width (white-noise model,
-so total information per round is fixed at `σ⁻²` regardless of partition resolution).
+`online-tolls/` is copied from [StanfordASL/online-tolls](https://github.com/StanfordASL/online-tolls) at commit `fb161ab` (MIT licence, see `online-tolls/LICENSE`), the code for their AISTATS 2023 paper, and modified here to suit newer Python / packages and better fit our setting. Its `requirements.txt` is their original conda export; use the top-level `requirements.txt` instead.
 
-Main results (theory only so far):
-- **Pooled-UCB** — uniform partition, pools `m` neighboring intervals, UCB over a
-  `K`-point price grid. Finite-sample bound splits into partition bias + price
-  discretization + statistical error; tuned, it gives `Õ(T^{3/4})`, **independent of `N`**.
-- **Pooled-Zooming** — adaptive price discretization; instance-dependent
-  `Õ(T^{(d_z+2)/(d_z+3)})` in the zooming dimension `d_z`.
-- Matching `Ω(T^{3/4})` lower bound is still a conjecture (Appendix B sketch).
+
 
 ## Requirements
 
@@ -41,42 +30,58 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
 
 See https://pytorch.org/get-started/locally/ for the correct command for your system.
 
-## Status / TODO
+### Gurobi licence
 
-No code yet. Planned, from the collaborator thread:
+The simulator solves LPs with Gurobi. The licence bundled with `pip install gurobipy` is size-limited and too small for Sioux Falls, so each machine needs a full licence:
 
-1. **Data** — `data/26-1763.zip` is not a zip; it's an S3 "Request has expired"
-   error page (expired presigned link, 2026-08-29). Needs re-downloading from the
-   Google Drive link Prof. Kim sent. The LA Metro ExpressLanes data stays within the
-   core project team.
-2. **Empirical regret check** — simulate a known `g`, run Pooled-UCB over increasing
-   `T`, log-log plot regret vs `T` against the predicted `3/4` slope; also break out
-   the three bound components separately.
-3. **Test the white-noise assumption** — aggregate ExpressLanes observations at
-   different interval lengths and see how residual variance scales with width; also
-   check serial correlation (may matter more than sub-Gaussianity).
-4. **Reward design** — Metro's objective is throughput / keeping density below
-   critical, with revenue secondary. Pick a `g` (e.g. one-sided penalty above critical
-   density, optionally weighted with revenue) that is operationally meaningful and
-   still Lipschitz.
-5. **Toll-update interval** — Metro uses 5 minutes; the theory says the right
-   resolution is `T^{-1/4}` in normalized time (data-dependent, not intrinsic). Use
-   the data to ask whether 5 min is right, and whether it should vary across the day.
-6. **Extensions** — density as context, `g(θ, ρ, p)` (`ρ` is not fully exogenous, so
-   this drifts past contextual bandits); adaptive pooling in *time*, not just price;
-   lower-bound proof.
+- **Academic named-user licence:** request a new key for each machine at https://portal.gurobi.com, then run `grbgetkey <key>` from the university network (or VPN). `grbgetkey` isn't included in the pip package; get it with `conda install -c gurobi gurobi`, or download Gurobi's standalone licence tools for Linux. The licence is written to `~/gurobi.lic` by default.
+- **Headless/remote servers:** if `grbgetkey` can't validate from the server, use an Academic WLS licence instead: download `gurobi.lic` from the portal and copy it to `~/gurobi.lic` (or set `GRB_LICENSE_FILE`).
 
-## System Specifications of Reported Runs
+### Data
 
-For all of the results we report in our paper, we use a dedicated Linux server with
-the following specifications:
+Our work uses proprietary LA Metro ExpressLanes data, which we do not have permission to share. For our internal purposes, here are instructions to run our code using that data on a new machine (data file name concealed for privacy): 
 
-| **Component** | **Details** |
-|--------------|-------------|
-| **Machine** | Lenovo ThinkStation P3 Tower Gen 2 |
-| **CPU** | Intel Core Ultra 9 285K (24 cores, up to 7.3 GHz) |
-| **GPU** | NVIDIA RTX 4000 Ada Generation (Lovelace) |
-| **RAM** | 48 GB |
-| **Storage** | 1.86 TB NVMe SSD + 2×10.9 TB HDD (≈ 23.7 TB total) |
-| **OS** | Ubuntu 24.04.2 LTS (Noble Numbat) |
-| **Driver** | NVIDIA 580.126.09 |
+Copy `data.zip` onto the machine (e.g. with `scp`), then:
+
+```bash
+scripts/setup_data.sh path/to/data.zip [expected_sha256]
+```
+
+This extracts everything, including zips nested inside the archive, to `data/extracted/`. If you pass the archive's SHA-256, it's checked first. Keep the hash with your own records, not in the repo. The simulator's daily demand profile is derived from this data on the first run and cached in `data/derived/` (also not in git). Without the data, pass a profile CSV with `--set profile=path/to/profile.csv` (columns `slot`, `demand`; 288 five-minute slots).
+
+### Check the setup
+
+```bash
+python scripts/check_setup.py
+```
+
+It checks the Python and package versions, that Gurobi can solve a full-size model, and that the data is in place.
+
+Gurobi results can differ slightly across Gurobi versions or thread counts when an LP has several optimal solutions, so keep `gurobipy` at the pinned version when comparing runs across machines.
+
+## Running experiments
+
+One command trains and evaluates every method and writes all results as CSVs:
+
+```bash
+python experiments/managed_lane.py --run-name <name>
+```
+
+- Results go to `Results/<name>/`: `config.json` and `run_info.json` (settings, git commit, package versions), `oracle/` (reward surface and calibration), one subfolder per method with a CSV per `(T, seed)` job, and `sioux_falls/` (the AISTATS 2023 Sioux Falls experiment, run unchanged).
+- Rerunning the same command resumes: finished jobs are skipped. A run's settings are fixed when it starts; changing them needs a new `--run-name`.
+- Jobs run in parallel on all cores (`--workers N` to limit). Change any setting with `--set KEY=JSON`, e.g. `--set seeds=10 'Ts=[100,1000]'`. `--skip-sioux-falls` leaves out the reproduction.
+- `--quick` uses tiny settings for an end-to-end check. Run it on a new machine first.
+
+For long runs on a remote server, detach from the session:
+
+```bash
+nohup python experiments/managed_lane.py --run-name <name> > <name>.log 2>&1 &
+```
+
+Figures and tables, from the CSVs only (works on a partial run):
+
+```bash
+python experiments/report.py Results/<name>
+```
+
+This writes `Results/<name>/figures/` (regret vs. T, final price schedules, reward surface) and `Results/<name>/tables/` (CSV and LaTeX), and prints the tables.

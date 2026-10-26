@@ -1,0 +1,6 @@
+# Python 3.11. Pinned to the versions used for our runs.
+gurobipy==13.0.3
+numpy==2.4.6
+pandas==3.1.0
+scipy==1.17.1
+matplotlib==3.11.2

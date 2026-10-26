@@ -10,6 +10,8 @@ expected_sha256=${2:-}
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 out_dir="$repo_root/data/extracted"
 
+command -v unzip >/dev/null || { echo "unzip is required (e.g. sudo apt install unzip)" >&2; exit 1; }
+
 if [[ -n "$expected_sha256" ]]; then
     if command -v sha256sum >/dev/null; then
         actual=$(sha256sum "$zip_path" | cut -d' ' -f1)
@@ -34,9 +36,12 @@ while true; do
         dest="${z%.zip}"
         [[ -d "$dest" ]] && continue
         found=1
-        mkdir -p "$dest"
-        unzip -q -n "$z" -d "$dest"
-    done < <(find "$out_dir" -name '*.zip' -not -path '*/__MACOSX/*' -print0)
+        # Extract next to the target and rename when complete, so a failed extraction is redone next time
+        rm -rf "$dest.partial"
+        mkdir -p "$dest.partial"
+        unzip -q "$z" -d "$dest.partial"
+        mv "$dest.partial" "$dest"
+    done < <(find "$out_dir" -name '*.zip' -not -path '*/__MACOSX/*' -not -path '*.partial/*' -print0)
     [[ $found -eq 0 ]] && break
 done
 

@@ -24,7 +24,7 @@ def report(passed, msg):
     print(('[ok]   ' if passed else '[FAIL] ') + msg)
 
 
-print(f'[info] Python {sys.version.split()[0]}')
+report(sys.version_info[:2] == (3, 11), f'Python {sys.version.split()[0]} (expected 3.11, see requirements.txt)')
 
 # Installed package versions match requirements.txt
 for line in REQUIREMENTS.read_text().splitlines():

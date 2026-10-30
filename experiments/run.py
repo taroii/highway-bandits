@@ -583,7 +583,7 @@ def run_info(cfg, profile_path):
     return {
         'started': datetime.now().isoformat(timespec='seconds'),
         'git_commit': git('rev-parse', 'HEAD'),
-        'git_dirty': bool(git('status', '--porcelain')),
+        'git_dirty': bool(git('status', '--porcelain', '--', '.', ':(exclude)Results')),
         'python': platform.python_version(),
         'platform': platform.platform(),
         'cpu_count': os.cpu_count(),

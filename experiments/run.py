@@ -44,6 +44,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TOLLS_DIR = REPO_ROOT / 'online-tolls'
 BPR_DIR = TOLLS_DIR / 'bpr-approximation'
 sys.path.insert(0, str(BPR_DIR))
+# Use a licence kept in the repo root if there is one; the Sioux Falls subprocess inherits this
+if (REPO_ROOT / 'gurobi.lic').is_file():
+    os.environ.setdefault('GRB_LICENSE_FILE', str(REPO_ROOT / 'gurobi.lic'))
 import gurobipy as gp  # noqa: E402
 from network import Network  # noqa: E402  (bpr-approximation version)
 from user_equilibrium_with_tolls import UserEquilibriumWithTolls  # noqa: E402

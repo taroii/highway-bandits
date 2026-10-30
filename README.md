@@ -35,7 +35,7 @@ See https://pytorch.org/get-started/locally/ for the correct command for your sy
 The simulators solve LPs and QPs with Gurobi. The licence bundled with `pip install gurobipy` is size-limited and too small for Sioux Falls, so each machine needs a full licence:
 
 - **Academic named-user licence:** request a new key for each machine at https://portal.gurobi.com, then run `grbgetkey <key>` from the university network (or VPN). `grbgetkey` isn't included in the pip package; get it with `conda install -c gurobi gurobi`, or download Gurobi's standalone licence tools for Linux. The licence is written to `~/gurobi.lic` by default.
-- **Headless/remote servers:** if `grbgetkey` can't validate from the server, use an Academic WLS licence instead: download `gurobi.lic` from the portal and copy it to `~/gurobi.lic` (or set `GRB_LICENSE_FILE`).
+- **Headless/remote servers:** if `grbgetkey` can't validate from the server, use an Academic WLS licence instead: download `gurobi.lic` from the portal and copy it to the repo root (gitignored; never commit it). `experiments/run.py` and `scripts/check_setup.py` use it automatically, unless `GRB_LICENSE_FILE` is already set. `~/gurobi.lic` also works.
 
 ### Data
 

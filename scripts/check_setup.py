@@ -4,6 +4,7 @@ Usage: python scripts/check_setup.py [--data-dir DIR]
 """
 import argparse
 import importlib
+import os
 import sys
 from pathlib import Path
 
@@ -39,6 +40,9 @@ for line in REQUIREMENTS.read_text().splitlines():
         report(False, f'{name} not installed')
 
 # Gurobi licence: a model bigger than the pip trial limit (2000 variables) must solve
+# Same lookup as experiments/run.py: a licence kept in the repo root is used if there is one
+if (REPO_ROOT / 'gurobi.lic').is_file():
+    os.environ.setdefault('GRB_LICENSE_FILE', str(REPO_ROOT / 'gurobi.lic'))
 try:
     import gurobipy as gp
     with gp.Env(params={'OutputFlag': 0}) as env, gp.Model(env=env) as m:

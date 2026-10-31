@@ -12,14 +12,20 @@ from pathlib import Path
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.ticker import FuncFormatter, LogLocator, NullFormatter  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-LABELS = {'oracle': 'Oracle', 'no_toll': 'No toll', 'gradient_descent': 'Gradient descent [AISTATS]',
-          'constant_update': 'Constant update [AISTATS]', 'uniform_ucb': 'Uniform-UCB (ours)',
-          'interval_zooming': 'Interval-Zooming (ours)',
-          'interval_zooming_agnostic': 'Interval-Zooming, $N = T^{1/4}$ (ours)'}
+LABELS = {'oracle': 'Oracle', 'no_toll': 'No toll', 'gradient_descent': 'Gradient descent',
+          'constant_update': 'Constant update', 'uniform_ucb': 'Uniform-UCB', 'interval_zooming': 'Interval-Zooming'}
+# Each method keeps its colour in every figure; ORDER is also the order in tables and legends
+COLORS = {'uniform_ucb': '#2a78d6', 'interval_zooming': '#eb6834', 'gradient_descent': '#1baf7a',
+          'constant_update': '#eda100', 'no_toll': '#e87ba4'}
+ORDER = ['uniform_ucb', 'interval_zooming', 'gradient_descent', 'constant_update', 'no_toll']
+ORACLE_COLOR, GRID_COLOR = '#52514e', '#e4e3df'
+plt.rcParams.update({'font.family': 'STIXGeneral', 'mathtext.fontset': 'stix', 'font.size': 10, 'pdf.fonttype': 42,
+                     'axes.spines.top': False, 'axes.spines.right': False, 'axes.axisbelow': True})
 METRICS = ['reward', 'throughput', 'el_excess_density', 'revenue', 'vot_travel_time']
 
 
@@ -66,6 +72,25 @@ def summarise(days):
     return out
 
 
+def regret_table(summary, path):
+    """Paper table: cumulative regret (standard error) per method and T, best method per T in bold."""
+    Ts = sorted(summary['T'].unique())
+    table = summary.set_index(['method', 'T'])
+    lines = ['\\begin{tabular}{l' + 'r' * len(Ts) + '}', '\\toprule',
+             'Method & ' + ' & '.join(f'$T={T:,}$'.replace(',', '{,}') for T in Ts) + ' \\\\', '\\midrule']
+    best = summary[summary['method'].isin(ORDER)].groupby('T')['regret'].min()
+    for method in ORDER:
+        if method not in set(summary['method']):
+            continue
+        cells = []
+        for T in Ts:
+            regret, se = table.loc[(method, T), ['regret', 'regret_se']]
+            cell = f'{regret:,.1f} ({se:.2f})'.replace(',', '{,}')
+            cells.append(f'\\textbf{{{cell}}}' if regret == best[T] else cell)
+        lines.append(LABELS[method] + ' & ' + ' & '.join(cells) + ' \\\\')
+    path.write_text('\n'.join(lines + ['\\bottomrule', '\\end{tabular}', '']))
+
+
 def to_latex(df, path):
     cols = list(df.columns)
     lines = ['\\begin{tabular}{' + 'l' * len(cols) + '}', ' & '.join(map(str, cols)).replace('_', '\\_') + ' \\\\', '\\hline']
@@ -76,17 +101,19 @@ def to_latex(df, path):
 
 
 def plot_regret(summary, path):
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    for method, df in summary[summary['method'] != 'oracle'].groupby('method', sort=False):
-        df = df[df['regret'] > 0]  # log axes: non-positive regret (beating the oracle) is not drawn
-        ax.errorbar(df['T'], df['regret'], yerr=df['regret_se'], marker='o', capsize=3, label=LABELS.get(method, method))
-    ours = summary[(summary['method'] == 'uniform_ucb') & (summary['regret'] > 0)]
-    if not ours.empty:
-        T0, R0 = ours['T'].iloc[0], ours['regret'].iloc[0]
-        Ts = np.array(sorted(summary['T'].unique()))
-        ax.plot(Ts, R0 * (Ts / T0) ** 0.75, 'k--', lw=1, label='$T^{3/4}$ reference')
-    ax.set(xscale='log', yscale='log', xlabel='Days $T$', ylabel='Cumulative regret')
-    ax.legend(frameon=False, fontsize=8)
+    fig, ax = plt.subplots(figsize=(6.5, 3.6))
+    for method in ORDER:
+        df = summary[(summary['method'] == method) & (summary['regret'] > 0)]
+        if not df.empty:
+            ax.errorbar(df['T'], df['regret'], yerr=df['regret_se'], marker='o', ms=4.5, capsize=2, lw=1.8,
+                        color=COLORS[method], label=LABELS[method])
+    Ts = sorted(summary['T'].unique())
+    ax.set(xscale='log', yscale='log', xlabel='Horizon $T$ (days)', ylabel='Cumulative regret')
+    ax.set_xticks(Ts, [f'{T:,}' for T in Ts], minor=False)
+    ax.xaxis.set_minor_formatter(NullFormatter())
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:,g}'))
+    ax.grid(color=GRID_COLOR, lw=0.6)
+    ax.legend(frameon=False, ncol=3, loc='lower center', bbox_to_anchor=(0.5, 1), fontsize=9)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -94,22 +121,37 @@ def plot_regret(summary, path):
 
 def plot_schedules(run_dir, cfg, path):
     T = max(cfg['Ts'])
-    hours = np.arange(cfg['slots']) * 24 / cfg['slots']
-    fig, ax = plt.subplots(figsize=(7, 4))
-    for method in cfg['methods']:
-        p = run_dir / method / f'T{T}_seed0_final_prices.csv'
-        if p.exists():
-            style = {'color': 'k', 'lw': 2} if method == 'oracle' else {}
-            ax.step(hours, pd.read_csv(p)['price'], where='post', label=LABELS.get(method, method), **style)
-    ax.set(xlabel='Time of day (h)', ylabel='Express-lane price (\\$)', title=f'Final schedules, T={T}, seed 0')
-    ax.legend(frameon=False, fontsize=8)
+    hours = np.arange(cfg['slots'] + 1) * 24 / cfg['slots']
+    prices = {m: pd.read_csv(p)['price'].to_numpy() for m in ['oracle', *ORDER]
+              if (p := run_dir / m / f'T{T}_seed0_final_prices.csv').exists()}
+    learners = [m for m in ORDER if m in prices and m != 'no_toll']
+    rows = int(np.ceil(len(learners) / 2))
     # Demand profile is derived from the proprietary data, so it is only drawn if present locally
     profile = Path(cfg['profile']) if cfg['profile'] else REPO_ROOT / 'data' / 'derived' / 'demand_profile.csv'
-    if profile.exists():
+    strip = int(profile.exists())
+    fig = plt.figure(figsize=(6.5, 1 + 1.75 * rows + 1.1 * strip))
+    grid = fig.add_gridspec(rows + strip, 2, height_ratios=[0.55] * strip + [1] * rows)
+    ticks, ticklabels = [0, 6, 12, 18, 24], ['00:00', '06:00', '12:00', '18:00', '24:00']
+    if strip:
+        ax = fig.add_subplot(grid[0, :])
         demand = pd.read_csv(profile)['demand'].to_numpy().reshape(cfg['slots'], -1).mean(axis=1)
-        ax2 = ax.twinx()
-        ax2.fill_between(hours, demand, step='post', color='gray', alpha=0.15)
-        ax2.set_ylabel('Relative demand')
+        ax.fill_between(hours, np.append(demand, demand[-1]) / demand.max(), step='post', color='#c3c2b7', lw=0)
+        ax.set(xlim=(0, 24), ylim=(0, 1.05), ylabel='Relative\ndemand')
+        ax.set_xticks(ticks, ticklabels)
+    axes = []
+    for i, method in enumerate(learners):
+        ax = fig.add_subplot(grid[strip + i // 2, i % 2], sharey=axes[0] if axes else None)
+        axes.append(ax)
+        ax.step(hours, np.append(prices['oracle'], prices['oracle'][-1]), where='post', color=ORACLE_COLOR, lw=1,
+                label=LABELS['oracle'])
+        ax.step(hours, np.append(prices[method], prices[method][-1]), where='post', color=COLORS[method], lw=1.8,
+                label=LABELS[method])
+        ax.set(xlim=(0, 24), ylim=(0, cfg['max_price']))
+        ax.set_xticks(ticks, ticklabels if i >= len(learners) - 2 else [])
+        ax.set_ylabel('Price (\\$)' if i % 2 == 0 else '')
+        ax.grid(axis='y', color=GRID_COLOR, lw=0.6)
+        ax.legend(frameon=False, ncol=2, loc='lower left', bbox_to_anchor=(0, 0.98), fontsize=9, borderaxespad=0,
+                  borderpad=0, handlelength=1.4)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -121,7 +163,7 @@ def plot_surface(run_dir, cfg, path):
     calib = json.loads((run_dir / 'oracle' / 'calibration.json').read_text())
     hours = np.arange(cfg['slots']) * 24 / cfg['slots']
     fig, ax = plt.subplots(figsize=(7, 4))
-    mesh = ax.pcolormesh(hours, grid.index, grid.to_numpy(), shading='nearest')
+    mesh = ax.pcolormesh(hours, grid.index, grid.to_numpy(), shading='nearest', rasterized=True)
     ax.step(hours, calib['oracle_prices'], where='post', color='w', lw=1.5, label='Oracle price')
     fig.colorbar(mesh, label='Expected reward $g(\\theta, p)$')
     ax.set(xlabel='Time of day (h)', ylabel='Express-lane price (\\$)')
@@ -150,18 +192,22 @@ def n_sweep(run_dir, cfg):
 
 def plot_n_sweep(sweep, run_dir, path):
     Ts = sorted(sweep['T'].unique())
-    fig, axes = plt.subplots(1, len(Ts), figsize=(6 * len(Ts), 4.5), squeeze=False)
+    fig, axes = plt.subplots(1, len(Ts), figsize=(3.25 * len(Ts), 3), squeeze=False)
     for ax, T in zip(axes[0], Ts):
-        for i, (method, df) in enumerate(sweep[sweep['T'] == T].groupby('method')):
-            color = f'C{i}'
-            ax.errorbar(df['N'], df['regret'], yerr=df['regret_se'], marker='o', capsize=3, color=color,
-                        label=LABELS.get(method, method))
+        for method, df in sweep[sweep['T'] == T].groupby('method'):
+            ax.errorbar(df['N'], df['regret'], yerr=df['regret_se'], marker='o', ms=4, capsize=2, lw=1.5,
+                        color=COLORS[method], label=LABELS[method])
             tuned = run_dir / method / f'T{T}_seed0.csv'  # the main run's N, tuned to T as in the paper
             if tuned.exists():
-                ax.axvline(pd.read_csv(tuned)['N'].iloc[0], color=color, ls='--', lw=1)
-        ax.set(xscale='log', xlabel='Number of intervals $N$', ylabel='Cumulative regret',
-               title=f'T={T} (dashed: tuned $N$)')
-        ax.legend(frameon=False, fontsize=8)
+                ax.axvline(pd.read_csv(tuned)['N'].iloc[0], color=COLORS[method], ls='--', lw=1)
+        ax.set(xscale='log', yscale='log', xlabel='Number of intervals $N$', ylabel='Cumulative regret',
+               title=f'$T = {T:,}$'.replace(',', '{,}'))
+        ax.yaxis.set_major_locator(LogLocator(subs=(1, 2, 5)))
+        ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _: f'{y:,g}'))
+        ax.yaxis.set_minor_formatter(NullFormatter())
+        ax.xaxis.set_major_formatter(FuncFormatter(lambda x, _: f'{x:g}'))
+        ax.grid(color=GRID_COLOR, lw=0.6)
+        ax.legend(frameon=False, fontsize=9)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
@@ -195,23 +241,6 @@ def synthetic(run_dir):
     return summary, pd.DataFrame(slopes)
 
 
-def plot_synthetic(summary, slopes, path):
-    shapes = list(summary['shape'].unique())
-    fig, axes = plt.subplots(1, len(shapes), figsize=(5 * len(shapes), 4.5), squeeze=False)
-    for ax, shape in zip(axes[0], shapes):
-        for method, df in summary[summary['shape'] == shape].groupby('method'):
-            fit = slopes[(slopes['shape'] == shape) & (slopes['method'] == method)]
-            label = LABELS.get(method, method) + (f" (slope {fit['fitted_slope'].iloc[0]:.2f}, "
-                                                  f"theory {fit['theory_slope'].iloc[0]:.2f})" if len(fit) else '')
-            ax.errorbar(df['T'], df['regret'], yerr=df['regret_se'], marker='o', capsize=3, label=label)
-        ax.set(xscale='log', yscale='log', xlabel='Rounds $T$', ylabel='Cumulative regret',
-               title=f"{shape} ($d_z$ = {summary[summary['shape'] == shape]['d_z'].iloc[0]:g})")
-        ax.legend(frameon=False, fontsize=7)
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
-
-
 def save(table, name, tab_dir, index=True):
     table.to_csv(tab_dir / f'{name}.csv', index=index)
     to_latex(table.reset_index() if index else table, tab_dir / f'{name}.tex')
@@ -239,6 +268,7 @@ def main():
         save(final, 'final_metrics', tab_dir)
         print('Normalised regret (cumulative regret / cumulative oracle reward), mean over seeds:\n', regret, '\n')
         print(f"Per-day averages at T={summary['T'].max()}:\n", final, '\n')
+        regret_table(summary, tab_dir / 'regret.tex')
         plot_regret(summary, fig_dir / 'regret_vs_T.pdf')
         plot_schedules(run_dir, cfg, fig_dir / 'schedules.pdf')
         plot_surface(run_dir, cfg, fig_dir / 'reward_surface.pdf')
@@ -258,7 +288,6 @@ def main():
         if not slopes.empty:
             save(slopes, 'synthetic_slopes', tab_dir, index=False)
             print('Synthetic surfaces, log-log slope of regret vs T (fitted vs. the paper\'s bound):\n', slopes, '\n')
-            plot_synthetic(syn, slopes, fig_dir / 'synthetic_rates.pdf')
 
     calib_path = run_dir / 'oracle' / 'calibration.json'
     if calib_path.exists():

@@ -94,7 +94,7 @@ CONFIG = {
     'n_sweep_seeds': 3,
     # Synthetic surfaces with known zooming dimension (see SYNTHETIC_SHAPES), Gaussian white noise
     'synthetic_shapes': ['sharp', 'quadratic', 'plateau'],
-    'synthetic_methods': ['uniform_ucb', 'interval_zooming', 'interval_zooming_agnostic'],
+    'synthetic_methods': ['uniform_ucb', 'interval_zooming'],
     'synthetic_Ts': [1000, 3000, 10000, 30000, 100000],
     'synthetic_seeds': 5,
     'synthetic_sigma': 0.1,
@@ -422,7 +422,7 @@ def run_synthetic_job(args):
     N = synthetic_N(method, T, dz)
     if method == 'uniform_ucb':
         algo = UniformUCB(N, N, int(np.ceil(T ** 0.25)), T, 1.0, sigma)
-    else:  # interval_zooming (N tuned to the true d_z) or interval_zooming_agnostic (N = ceil(T^(1/4)))
+    else:  # N tuned to the true d_z, as in Corollary cor:zoom
         algo = IntervalZooming(N, N, T, 1.0, sigma, lip)
     piece = (theta * N).astype(int)  # interval of each time point
     points = np.bincount(piece, minlength=N)  # time points per interval (needs grid >= N)
@@ -653,8 +653,8 @@ def check_config(cfg):
         fail("'oracle' must be in methods: regret for the simulator, tuning and N sweep is measured against it")
     if set(cfg['n_sweep_methods']) - {'uniform_ucb', 'interval_zooming'}:
         fail('n_sweep_methods must be uniform_ucb and/or interval_zooming')
-    if set(cfg['synthetic_methods']) - {'uniform_ucb', 'interval_zooming', 'interval_zooming_agnostic'}:
-        fail('synthetic_methods must be from uniform_ucb, interval_zooming, interval_zooming_agnostic')
+    if set(cfg['synthetic_methods']) - {'uniform_ucb', 'interval_zooming'}:
+        fail('synthetic_methods must be from uniform_ucb, interval_zooming')
     if set(cfg['synthetic_shapes']) - set(SYNTHETIC_SHAPES):
         fail(f'synthetic_shapes must be from {list(SYNTHETIC_SHAPES)}')
     if cfg['mc_draws'] < 2 or cfg['price_grid'] < 2:
@@ -809,8 +809,6 @@ def main():
                          for s in range(cfg['n_sweep_seeds'])]
             for shape in cfg['synthetic_shapes']:
                 for m in cfg['synthetic_methods']:
-                    if m == 'interval_zooming_agnostic' and SYNTHETIC_SHAPES[shape][1] == 1.0:
-                        continue  # same N as interval_zooming when d_z = 1
                     (run_dir / 'synthetic' / shape / m).mkdir(parents=True, exist_ok=True)
                     jobs += [(run_synthetic_job, (shape, m, T, s, cfg,
                                                   str(run_dir / 'synthetic' / shape / m / f'T{T}_seed{s}.csv')))

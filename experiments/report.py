@@ -19,7 +19,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LABELS = {'oracle': 'Oracle', 'no_toll': 'No toll', 'gradient_descent': 'Gradient descent [AISTATS]',
           'constant_update': 'Constant update [AISTATS]', 'uniform_ucb': 'Uniform-UCB (ours)',
           'interval_zooming': 'Interval-Zooming (ours)',
-          'interval_zooming_no_floor': 'Interval-Zooming, no noise floor (diagnostic)',
           'interval_zooming_agnostic': 'Interval-Zooming, $N = T^{1/4}$ (ours)'}
 METRICS = ['reward', 'throughput', 'el_excess_density', 'revenue', 'vot_travel_time']
 

@@ -56,8 +56,7 @@ CONFIG = {
     # experiment grid
     'Ts': [100, 300, 1000, 3000, 10000],
     'seeds': 5,
-    'methods': ['oracle', 'no_toll', 'gradient_descent', 'constant_update', 'uniform_ucb', 'interval_zooming',
-                'interval_zooming_no_floor'],
+    'methods': ['oracle', 'no_toll', 'gradient_descent', 'constant_update', 'uniform_ucb', 'interval_zooming'],
     # simulator
     'network': 'ManagedLane',        # folder in online-tolls/bpr-approximation/Locations
     'el_edge': 0,                    # tolled express-lane edge
@@ -90,7 +89,7 @@ CONFIG = {
     # N sweep on the managed-lane simulator: our methods at each T in n_sweep_Ts for every N in n_sweep_Ns
     # (None: every divisor of slots), on the first n_sweep_seeds evaluation seeds
     'n_sweep_methods': ['uniform_ucb', 'interval_zooming'],
-    'n_sweep_Ts': [1000],
+    'n_sweep_Ts': [1000, 10000],
     'n_sweep_Ns': None,
     'n_sweep_seeds': 3,
     # Synthetic surfaces with known zooming dimension (see SYNTHETIC_SHAPES), Gaussian white noise
@@ -339,15 +338,12 @@ class UniformUCB:
 
 class IntervalZooming:
     """Ours: Interval-Zooming (Algorithm alg:zooming) on N intervals, delta = 1/T. Corollary cor:zoom sets
-    N = ceil(T^(1/(d_z + 3))); d_z = 1 gives the instance-agnostic N = ceil(T^(1/4)). floor=False drops the
-    paper's noise floor and uses the calibrated sigma (a diagnostic, not the algorithm as stated)."""
+    N = ceil(T^(1/(d_z + 3))); d_z = 1 gives the instance-agnostic N = ceil(T^(1/4))."""
 
-    def __init__(self, slots, N, T, max_price, sigma, lip, floor=True):
+    def __init__(self, slots, N, T, max_price, sigma, lip):
         self.N, self.slots_per_interval = N, slots // N
         self.max_price, self.lip = max_price, max(lip, 1e-12)
         self.iota = np.log(2 * N * T ** 3)  # bar-iota = log(2 N T^2 / delta)
-        if floor:
-            sigma = max(sigma, 1 / np.sqrt(2 * self.iota))  # the paper's w.l.o.g. sigma * sqrt(2 bar-iota) >= 1
         self.sigma_prime = sigma * np.sqrt(N)
         self.active = [[] for _ in range(N)]  # per interval: [price, plays, mean of Z]
 
@@ -393,10 +389,9 @@ def make_method(name, T, cfg, calib):
     if name == 'uniform_ucb':
         N = cfg['intervals'] or num_intervals(slots, T, 1 / 4)
         return UniformUCB(slots, N, int(np.ceil(T ** 0.25)), T, max_price, calib['sigma'])
-    if name in ('interval_zooming', 'interval_zooming_no_floor'):
+    if name == 'interval_zooming':
         N = cfg['intervals'] or num_intervals(slots, T, 1 / (cfg['zooming_dz'] + 3))
-        return IntervalZooming(slots, N, T, max_price, calib['sigma'], calib['lipschitz_price'],
-                               floor=name == 'interval_zooming')
+        return IntervalZooming(slots, N, T, max_price, calib['sigma'], calib['lipschitz_price'])
     raise ValueError(f'unknown method {name}')
 
 
@@ -643,8 +638,7 @@ def acquire_lock(run_dir):
     return lock
 
 
-MANAGED_LANE_METHODS = {'oracle', 'no_toll', 'gradient_descent', 'constant_update', 'uniform_ucb', 'interval_zooming',
-                        'interval_zooming_no_floor'}
+MANAGED_LANE_METHODS = {'oracle', 'no_toll', 'gradient_descent', 'constant_update', 'uniform_ucb', 'interval_zooming'}
 SIMULATOR_KEYS = {'network', 'el_edge', 'gp_edge', 'slots', 'peak_demand', 'vehicles_per_flow_unit', 'vot_groups',
                   'vot_seed', 'hours_per_length', 'max_price', 'density_penalty', 'rho_crit', 'profile'}
 

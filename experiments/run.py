@@ -56,7 +56,8 @@ CONFIG = {
     # experiment grid
     'Ts': [100, 300, 1000, 3000, 10000],
     'seeds': 5,
-    'methods': ['oracle', 'no_toll', 'gradient_descent', 'constant_update', 'uniform_ucb', 'interval_zooming'],
+    'methods': ['oracle', 'no_toll', 'gradient_descent', 'constant_update', 'uniform_ucb', 'interval_zooming',
+                'interval_zooming_no_floor'],
     # simulator
     'network': 'ManagedLane',        # folder in online-tolls/bpr-approximation/Locations
     'el_edge': 0,                    # tolled express-lane edge
@@ -66,23 +67,24 @@ CONFIG = {
     'vehicles_per_flow_unit': 28800,  # vehicles per day carried by one unit of flow (Poisson scale)
     'vot_groups': 10,
     'vot_seed': 5,
-    'max_price': 60.0,
+    'hours_per_length': 0.25,        # one network length unit is 15 minutes, so VOT ($/hour) * time is in dollars
+    'max_price': 15.0,
     # reward: g = (EL + GP flow) / peak_demand - density_penalty * (EL density above rho_crit) / rho_crit
     'density_penalty': 1.0,
     'rho_crit': None,                # None: EL density at the BPR kink (1.1 * capacity)
     # oracle and calibration
     'price_grid': 61,
-    'mc_draws': 20,
+    'mc_draws': 1000,                # enough that the per-slot argmax is the benchmark, not Monte Carlo noise
     # ours: number of intervals N. None: tuned to T as in the paper (Uniform-UCB N = ceil(T^(1/4)),
     # Interval-Zooming N = ceil(T^(1/(zooming_dz + 3))); zooming_dz = 1 is the instance-agnostic T^(1/4))
     'intervals': None,
     'zooming_dz': 1.0,
     # their baselines
-    'gd_eta0': 6.0,                  # gradient descent step size is gd_eta0 / sqrt(T); replaced if tuned below
-    'const_step': 0.6,
+    'gd_eta0': 1.5,                  # gradient descent step size is gd_eta0 / sqrt(T); replaced if tuned below
+    'const_step': 0.15,
     # One-time tuning of baseline hyperparameters, {method: {config key: grid}}: each value is run at
     # T = tune_T on tune_seeds held-out seeds, and the one with the highest mean reward is used for every job
-    'tune': {'gradient_descent': {'gd_eta0': [0.6, 2.0, 6.0, 20.0, 60.0]}},
+    'tune': {'gradient_descent': {'gd_eta0': [0.15, 0.5, 1.5, 5.0, 15.0, 50.0, 150.0]}},
     'tune_T': 1000,
     'tune_seeds': 3,
     # N sweep on the managed-lane simulator: our methods at each T in n_sweep_Ts for every N in n_sweep_Ns
@@ -96,13 +98,13 @@ CONFIG = {
     'synthetic_methods': ['uniform_ucb', 'interval_zooming', 'interval_zooming_agnostic'],
     'synthetic_Ts': [1000, 3000, 10000, 30000, 100000],
     'synthetic_seeds': 5,
-    'synthetic_sigma': 0.5,
+    'synthetic_sigma': 0.1,
     'synthetic_grid': 2000,          # time points per day for the integrals
     # demand profile CSV (columns slot, demand); None: derive from data/extracted
     'profile': None,
 }
 QUICK = {'Ts': [20, 50], 'seeds': 2, 'slots': 24, 'price_grid': 13, 'mc_draws': 4,
-         'tune': {'gradient_descent': {'gd_eta0': [2.0, 20.0]}}, 'tune_T': 20, 'tune_seeds': 1,
+         'tune': {'gradient_descent': {'gd_eta0': [0.5, 5.0]}}, 'tune_T': 20, 'tune_seeds': 1,
          'n_sweep_Ts': [20], 'n_sweep_Ns': [1, 4, 24], 'n_sweep_seeds': 1,
          'synthetic_Ts': [100, 300], 'synthetic_seeds': 1, 'synthetic_grid': 240}
 ORACLE_SEED = 10 ** 6  # Monte Carlo draws use seeds ORACLE_SEED + i, disjoint from run seeds
@@ -208,8 +210,8 @@ class ManagedLaneEnv:
             od = pd.read_csv(f"Locations/{cfg['network']}/od.csv").iloc[0]
         # Plain floats, so their objective never multiplies numpy scalars by Gurobi variables
         self.network.edge_latency = [float(v) for v in self.network.edge_latency]
-        # Group mean VOTs as in their main experiment: 5 + 95 * U(0, 1)
-        self.vot_means = 5 + 95 * np.random.default_rng(cfg['vot_seed']).random(cfg['vot_groups'])
+        # Group mean VOTs as in their main experiment, $5-100 per hour: 5 + 95 * U(0, 1), per network time unit
+        self.vot_means = cfg['hours_per_length'] * (5 + 95 * np.random.default_rng(cfg['vot_seed']).random(cfg['vot_groups']))
         self.users = Users(int(od['origin']), int(od['destination']), self.vot_means.tolist())
         self.ue = UserEquilibriumWithTolls(self.network, self.users, np.zeros(self.network.NumEdges),
                                            piecewise_bpr=True)
@@ -337,13 +339,15 @@ class UniformUCB:
 
 class IntervalZooming:
     """Ours: Interval-Zooming (Algorithm alg:zooming) on N intervals, delta = 1/T. Corollary cor:zoom sets
-    N = ceil(T^(1/(d_z + 3))); d_z = 1 gives the instance-agnostic N = ceil(T^(1/4))."""
+    N = ceil(T^(1/(d_z + 3))); d_z = 1 gives the instance-agnostic N = ceil(T^(1/4)). floor=False drops the
+    paper's noise floor and uses the calibrated sigma (a diagnostic, not the algorithm as stated)."""
 
-    def __init__(self, slots, N, T, max_price, sigma, lip):
+    def __init__(self, slots, N, T, max_price, sigma, lip, floor=True):
         self.N, self.slots_per_interval = N, slots // N
         self.max_price, self.lip = max_price, max(lip, 1e-12)
         self.iota = np.log(2 * N * T ** 3)  # bar-iota = log(2 N T^2 / delta)
-        sigma = max(sigma, 1 / np.sqrt(2 * self.iota))  # the paper's w.l.o.g. sigma * sqrt(2 bar-iota) >= 1
+        if floor:
+            sigma = max(sigma, 1 / np.sqrt(2 * self.iota))  # the paper's w.l.o.g. sigma * sqrt(2 bar-iota) >= 1
         self.sigma_prime = sigma * np.sqrt(N)
         self.active = [[] for _ in range(N)]  # per interval: [price, plays, mean of Z]
 
@@ -389,9 +393,10 @@ def make_method(name, T, cfg, calib):
     if name == 'uniform_ucb':
         N = cfg['intervals'] or num_intervals(slots, T, 1 / 4)
         return UniformUCB(slots, N, int(np.ceil(T ** 0.25)), T, max_price, calib['sigma'])
-    if name == 'interval_zooming':
+    if name in ('interval_zooming', 'interval_zooming_no_floor'):
         N = cfg['intervals'] or num_intervals(slots, T, 1 / (cfg['zooming_dz'] + 3))
-        return IntervalZooming(slots, N, T, max_price, calib['sigma'], calib['lipschitz_price'])
+        return IntervalZooming(slots, N, T, max_price, calib['sigma'], calib['lipschitz_price'],
+                               floor=name == 'interval_zooming')
     raise ValueError(f'unknown method {name}')
 
 
@@ -472,7 +477,12 @@ def oracle_slot(args):
     for i in range(draws):
         vols, vots = ENV.draw(ORACLE_SEED + i, 0, slot)
         rewards[i] = [ENV.solve(vols, vots, p)['reward'] for p in prices]
-    return rewards.mean(axis=0), rewards.var(axis=0, ddof=1)
+    # Bracket max_p E[g(p)]: the max of a sample mean overestimates it in expectation, and the value on one half
+    # of the price chosen on the other half underestimates it
+    half_a, half_b = rewards[:draws // 2].mean(axis=0), rewards[draws // 2:].mean(axis=0)
+    upper = (half_a.max() + half_b.max()) / 2
+    lower = (half_b[half_a.argmax()] + half_a[half_b.argmax()]) / 2
+    return rewards.mean(axis=0), rewards.var(axis=0, ddof=1), lower, upper
 
 
 def write_csv(df, path):
@@ -633,9 +643,10 @@ def acquire_lock(run_dir):
     return lock
 
 
-MANAGED_LANE_METHODS = {'oracle', 'no_toll', 'gradient_descent', 'constant_update', 'uniform_ucb', 'interval_zooming'}
+MANAGED_LANE_METHODS = {'oracle', 'no_toll', 'gradient_descent', 'constant_update', 'uniform_ucb', 'interval_zooming',
+                        'interval_zooming_no_floor'}
 SIMULATOR_KEYS = {'network', 'el_edge', 'gp_edge', 'slots', 'peak_demand', 'vehicles_per_flow_unit', 'vot_groups',
-                  'vot_seed', 'max_price', 'density_penalty', 'rho_crit', 'profile'}
+                  'vot_seed', 'hours_per_length', 'max_price', 'density_penalty', 'rho_crit', 'profile'}
 
 
 def check_config(cfg):
@@ -755,6 +766,9 @@ def main():
                           oracle_dir / 'surface.csv')
                 write_json({
                     'oracle_prices': prices[mean.argmax(axis=1)].tolist(),
+                    # The optimal mean daily reward on the price grid lies between these, up to Monte Carlo error
+                    'oracle_value_lower': float(np.mean([r[2] for r in results])),
+                    'oracle_value_upper': float(np.mean([r[3] for r in results])),
                     # White noise: Var(Y_k) = sigma^2 * Delta with Y_k = g_k * Delta, Delta = 1 / slots
                     'sigma': float(np.sqrt(var.max() / cfg['slots'])),
                     'lipschitz_price': float(np.abs(np.diff(mean, axis=1)).max() / (prices[1] - prices[0])),

@@ -19,6 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 LABELS = {'oracle': 'Oracle', 'no_toll': 'No toll', 'gradient_descent': 'Gradient descent [AISTATS]',
           'constant_update': 'Constant update [AISTATS]', 'uniform_ucb': 'Uniform-UCB (ours)',
           'interval_zooming': 'Interval-Zooming (ours)',
+          'interval_zooming_no_floor': 'Interval-Zooming, no noise floor (diagnostic)',
           'interval_zooming_agnostic': 'Interval-Zooming, $N = T^{1/4}$ (ours)'}
 METRICS = ['reward', 'throughput', 'el_excess_density', 'revenue', 'vot_travel_time']
 
@@ -57,7 +58,13 @@ def summarise(days):
     out = g.mean().drop(columns='oracle_total')
     out['regret_se'] = g['regret'].sem()
     out['seeds'] = g.size()
-    return out.reset_index()
+    out = out.reset_index()
+    # Regret against a true optimum cannot be negative beyond noise: if it is, the oracle isn't optimal
+    beaten = out[out['regret'] < -2 * out['regret_se']]
+    if not beaten.empty:
+        print('WARNING: oracle beaten, so its regret benchmark is invalid:\n',
+              beaten[['method', 'T', 'regret', 'regret_se']].to_string(index=False))
+    return out
 
 
 def to_latex(df, path):
@@ -95,7 +102,7 @@ def plot_schedules(run_dir, cfg, path):
         if p.exists():
             style = {'color': 'k', 'lw': 2} if method == 'oracle' else {}
             ax.step(hours, pd.read_csv(p)['price'], where='post', label=LABELS.get(method, method), **style)
-    ax.set(xlabel='Time of day (h)', ylabel='Express-lane price', title=f'Final schedules, T={T}, seed 0')
+    ax.set(xlabel='Time of day (h)', ylabel='Express-lane price (\\$)', title=f'Final schedules, T={T}, seed 0')
     ax.legend(frameon=False, fontsize=8)
     # Demand profile is derived from the proprietary data, so it is only drawn if present locally
     profile = Path(cfg['profile']) if cfg['profile'] else REPO_ROOT / 'data' / 'derived' / 'demand_profile.csv'
@@ -118,7 +125,7 @@ def plot_surface(run_dir, cfg, path):
     mesh = ax.pcolormesh(hours, grid.index, grid.to_numpy(), shading='nearest')
     ax.step(hours, calib['oracle_prices'], where='post', color='w', lw=1.5, label='Oracle price')
     fig.colorbar(mesh, label='Expected reward $g(\\theta, p)$')
-    ax.set(xlabel='Time of day (h)', ylabel='Express-lane price')
+    ax.set(xlabel='Time of day (h)', ylabel='Express-lane price (\\$)')
     ax.legend(frameon=False, loc='upper right')
     fig.tight_layout()
     fig.savefig(path)
@@ -253,6 +260,12 @@ def main():
             save(slopes, 'synthetic_slopes', tab_dir, index=False)
             print('Synthetic surfaces, log-log slope of regret vs T (fitted vs. the paper\'s bound):\n', slopes, '\n')
             plot_synthetic(syn, slopes, fig_dir / 'synthetic_rates.pdf')
+
+    calib_path = run_dir / 'oracle' / 'calibration.json'
+    if calib_path.exists():
+        calib = json.loads(calib_path.read_text())
+        print(f"Optimal mean daily reward is in [{calib.get('oracle_value_lower')}, {calib.get('oracle_value_upper')}]; "
+              'the oracle row of the summary should be inside it\n')
 
     for chosen in sorted((run_dir / 'tuning').glob('*/chosen.json')):
         c = json.loads(chosen.read_text())
